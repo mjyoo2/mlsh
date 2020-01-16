@@ -17,7 +17,8 @@ def set_env(self, env):
                   "this model cannot be trained until it has a valid environment.")
         return
     elif env is None:
-        raise ValueError("Error: trying to replace the current environment with None")
+        raise ValueError(
+            "Error: trying to replace the current environment with None")
 
     # sanity checking the environment
     assert self.observation_space == env.observation_space, \
@@ -61,7 +62,8 @@ class MasterModel(BaseRLModel):
         master_model_class = copy(master_model_class)
         setattr(master_model_class, "set_env", set_env)
         if isinstance(env, VecEnv):
-            temp_env = make_vec_env([lambda: self.tempenv(env.observation_space, num_subpolicy)])
+            temp_env = make_vec_env(
+                [lambda: self.tempenv(env.observation_space, num_subpolicy)])
         else:
             temp_env = self.tempenv(env.observation_space, num_subpolicy)
         self.model = master_model_class(policy, temp_env)
@@ -86,7 +88,8 @@ class MasterModel(BaseRLModel):
                       "this model cannot be trained until it has a valid environment.")
             return
         elif env is None:
-            raise ValueError("Error: trying to replace the current environment with None")
+            raise ValueError(
+                "Error: trying to replace the current environment with None")
 
         # sanity checking the environment
         assert self.observation_space == env.observation_space, \
@@ -125,11 +128,28 @@ class MasterModel(BaseRLModel):
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         return self.model.action_probability(observation, state, mask, actions, logp)
 
+    def setup_model(self):
+        pass
+
+    def get_parameter_list(self):
+        return self.model.get_parameter_list()
+
+    def _get_pretrain_placeholders(self):
+        return self.model._get_pretrain_placeholders()
+
     def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="master",
               reset_num_timesteps=False):
         return self.model.learn(total_timesteps, callback=callback, log_interval=log_interval, tb_log_name=tb_log_name,
-              reset_num_timesteps=reset_num_timesteps)
+                                reset_num_timesteps=reset_num_timesteps)
 
     def predict(self, observation, state=None, mask=None, deterministic=False):
         return self.model.predict(observation, state, mask, deterministic)
 
+    def save(self, save_path, cloudpickle=False):
+        # TODO: how to save the master and sub models
+        self.model.save(save_path, cloudpickle=cloudpickle)
+
+    @classmethod
+    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
+        # TODO: load the master model
+        pass
