@@ -106,4 +106,7 @@ wwwwwwwwwwwww
         # statevec[state] = 1
         # return statevec, float(done), False, None
 
-        return state, float(done), False, None
+        return state, float(done), False, {}
+
+    def render(self, mode='human'):
+        pass

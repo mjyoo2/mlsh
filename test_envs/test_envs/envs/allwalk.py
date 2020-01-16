@@ -50,7 +50,7 @@ class Allwalk(gym.Env):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
-    def _step(self, action):
+    def step(self, action):
         if action == 1:
             self.state[0] += 20
         if action == 2:
@@ -72,13 +72,13 @@ class Allwalk(gym.Env):
     def obs(self):
         return np.reshape(np.array([self.state]), (-1,))
 
-    def _reset(self):
+    def reset(self):
         self.state = [200.0, 200.0]
         self.goals = []
         self.goals.append(self.realgoal)
         return self.obs()
 
-    def _render(self, mode='human', close=False):
+    def render(self, mode='human', close=False):
         if close:
             if self.viewer is not None:
                 self.viewer.close()
