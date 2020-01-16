@@ -1,0 +1,3 @@
+gym==0.15.4
+stable-baselines==2.9.0
+-e ./test_envs
