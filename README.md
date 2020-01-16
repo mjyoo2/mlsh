@@ -1,2 +1,2 @@
 # mlsh
-안써도 된대요
+Implementation of [MLSH](https://arxiv.org/pdf/1710.09767.pdf)
