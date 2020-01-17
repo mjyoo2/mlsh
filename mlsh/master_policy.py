@@ -56,26 +56,41 @@ def set_env(self, env):
 
 
 class MasterModel(BaseRLModel):
+
+    class TempEnv(Env):
+        def __init__(self, observation_space, num_subpolicy):
+            self.observation_space = observation_space
+            self.action_space = Discrete(num_subpolicy)
+
+        def step(self, action):
+            pass
+
+        def reset(self):
+            pass
+
+        def render(self, mode='human'):
+            pass
+
+
     def __init__(self, policy, env, master_model_class, num_subpolicy=3, *args, **kwargs):
+        if "requires_vec_env" not in kwargs.keys():
+            kwargs["requires_vec_env"] = True
+        if "policy_base" not in kwargs.keys():
+            kwargs["policy_base"] = None
         super(MasterModel, self).__init__(policy, env, **kwargs)
         self.num_subpolicy = num_subpolicy
         master_model_class = copy(master_model_class)
         setattr(master_model_class, "set_env", set_env)
         if isinstance(env, VecEnv):
-            temp_env = make_vec_env(
-                [lambda: self.tempenv(env.observation_space, num_subpolicy)])
+            temp_env = make_vec_env(lambda: self.tempenv(env.observation_space, num_subpolicy),n_envs=1)
         else:
             temp_env = self.tempenv(env.observation_space, num_subpolicy)
         self.model = master_model_class(policy, temp_env)
         self.action_space = Discrete(self.num_subpolicy)
 
-    @staticmethod
-    def tempenv(observation_space, num_subpolicy):
-        class TempEnv(object):
-            def __init__(self):
-                self.observation_space = observation_space
-                self.action_space = Discrete(num_subpolicy)
-        return TempEnv
+    @classmethod
+    def tempenv(cls, observation_space, num_subpolicy):
+        return cls.TempEnv(observation_space, num_subpolicy)
 
     def set_env(self, env):
         """
@@ -153,3 +168,12 @@ class MasterModel(BaseRLModel):
     def load(cls, load_path, env=None, custom_objects=None, **kwargs):
         # TODO: load the master model
         pass
+
+
+
+import gym
+from stable_baselines.common.policies import MlpPolicy
+from stable_baselines import PPO2
+if __name__ == '__main__':
+    env = make_vec_env("CartPole-v0", n_envs=8)
+    model = MasterModel(env=env, policy=MlpPolicy, master_model_class=PPO2)
