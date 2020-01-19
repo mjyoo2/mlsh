@@ -96,6 +96,10 @@ class MLSH(BaseRLModel):
             learning_rate = get_schedule_fn(self.master_model.learning_rate)
             cliprange = get_schedule_fn(self.master_model.cliprange)
             cliprange_vf = get_schedule_fn(self.master_model.cliprange_vf)
+
+            subpolicy_scheduler = [[get_schedule_fn(s.learning_rate), get_schedule_fn(s.cliprange),
+                                                    get_schedule_fn(s.cliprange_vf)] for s in self.subpolicies]
+
             self.master_model._setup_learn()
             runner = MLSHRunner(env=self.env, gamma = self.gamma, lam = self.lam,
                                 n_steps=self.master_model.n_steps, master_model=self.master_model,
@@ -108,7 +112,7 @@ class MLSH(BaseRLModel):
             for update in range(1, n_updates + 1):
                 batch_size = n_batch // self.master_model.nminibatches
                 t_start = time.time()
-                frac = 1.0 - (update - 1.0) / self.warm_up
+                frac = 1.0 - (update - 1.0) / n_updates
                 lr_now =  learning_rate(frac)
                 cliprange_now = cliprange(frac)
                 cliprange_vf_now = cliprange_vf(frac)
@@ -117,58 +121,84 @@ class MLSH(BaseRLModel):
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward, subpolicy_traj  = runner.run()
 
                 # for memory efficiency, delete the objects
-
                 if update < self.warm_up:
                     del subpolicy_traj
                 else:
                     # for each sub policy trajectory
-                    for i in range(len(subpolicy_traj)):
+                    for j in range(len(self.subpolicies)):
                         # for each subpolicies
-                        for j in range(len(self.subpolicies)):
+                        target_subpolicy = self.subpolicies[j]
+                        subpolicy_batch =[]
+                        frac_s = 1.0 - ((update - self.warm_up)  - 1.0) / (n_updates - self.warm_up)
+                        lr_now_s = subpolicy_scheduler[j][0](frac_s)
+                        cliprange_now_s = subpolicy_scheduler[j][1](frac_s)
+                        cliprange_vf_now_s = subpolicy_scheduler[j][2](frac_s)
+
+                        for i in range(len(subpolicy_traj)):
                             subpoliciy_mnbatch = subpolicy_traj[i][j]
                             if not subpoliciy_mnbatch.valid:
                                 continue
-                            target_subpolicy = self.subpolicies[j]
-                            obs_s = subpoliciy_mnbatch["obs"]
-                            returns_s = subpoliciy_mnbatch["returns"]
-                            masks_s = subpoliciy_mnbatch["dones"]
-                            actions_s = subpoliciy_mnbatch["actions"]
-                            values_s = subpoliciy_mnbatch["values"]
-                            neglogpacs_s = subpoliciy_mnbatch["neglogpacs"]
-                            states_s = None
-                            # states_s = subpoliciy_mnbatch["states"]  # This is for recurrent policy,
-                            true_reward_s = subpoliciy_mnbatch["true_rewards"]
-                            update_fac = target_subpolicy.n_batch // target_subpolicy.nminibatches // target_subpolicy.noptepochs + 1
-                            inds = np.arange(target_subpolicy.n_batch)
+                            else:
+                                subpolicy_batch.append(subpoliciy_mnbatch)
 
-                            mb_loss_vals_s = []
-                            for epoch_num in range(target_subpolicy.noptepochs):
-                                np.random.shuffle(inds)
-                                for start in range(0, target_subpolicy.n_batch, batch_size):
-                                    timestep_s = self.num_timesteps // update_fac + ((target_subpolicy.noptepochs * target_subpolicy.n_batch
-                                                                                      + epoch_num
-                                                                                      * target_subpolicy.n_batch + start) // batch_size)
-                                    end = start + batch_size
-                                    mbinds = inds[start:end]
-                                    slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                                    mb_loss_vals_s.append(target_subpolicy._train_step(lr_now, cliprange_now, *slices, writer=writer,
-                                                                         update=timestep_s, cliprange_vf=cliprange_vf_now))
+                        # merge all transitions to batch
+                        obs_s = []
+                        returns_s = []
+                        masks_s = []
+                        actions_s = []
+                        values_s = []
+                        neglogpacs_s = []
+                        true_rewards_s = []
+                        for i in range(len(subpolicy_batch)):
+                            subpoliciy_mnbatch = subpolicy_batch[i]
+                            obs_s.append(subpoliciy_mnbatch["obs"])
+                            returns_s.append(subpoliciy_mnbatch["returns"])
+                            masks_s.append(subpoliciy_mnbatch["dones"])
+                            actions_s.append(subpoliciy_mnbatch["actions"])
+                            values_s.append(subpoliciy_mnbatch["values"])
+                            neglogpacs_s.append(subpoliciy_mnbatch["neglogpacs"])
+                            true_rewards_s.append(subpoliciy_mnbatch["true_rewards"])
 
-                            if self.verbose >= 1 and (update % subpolicy_log_interval == 0 or update == 1):
-                                explained_var_s = explained_variance(values_s, returns_s)
-                                logger.logkv("subpolicy index", j)
-                                logger.logkv("explained_variance", float(explained_var_s))
-                                logger.logkv("loss", safe_mean(np.asarray(mb_loss_vals_s, dtype=np.float32)))
-                                for (loss_val, loss_name) in zip(loss_vals, target_subpolicy.loss_names):
-                                    logger.logkv(loss_name, loss_val)
-                                logger.dumpkvs()
+                        obs_s = np.vstack(obs_s)
+                        actions_s = np.squeeze(np.vstack(actions_s))
+                        masks_s = np.hstack(masks_s)
+                        values_s = np.hstack(values_s)
+                        returns_s = np.hstack(returns_s)
+                        neglogpacs_s = np.squeeze(np.vstack(neglogpacs_s))
+                        true_rewards_s = np.hstack(true_rewards_s)
+                        states_s = None
+                        # states_s = subpoliciy_mnbatch["states"]  # This is for recurrent policy,
+                        update_fac = target_subpolicy.n_batch // target_subpolicy.nminibatches // target_subpolicy.noptepochs + 1
+                        inds = np.arange(len(returns_s))
+
+                        mb_loss_vals_s = []
+                        for epoch_num in range(target_subpolicy.noptepochs):
+                            np.random.shuffle(inds)
+                            for start in range(0, target_subpolicy.n_batch, batch_size):
+                                timestep_s = self.num_timesteps // update_fac + ((target_subpolicy.noptepochs * target_subpolicy.n_batch
+                                                                                  + epoch_num
+                                                                                  * target_subpolicy.n_batch + start) // batch_size)
+                                end = start + batch_size
+                                mbinds = inds[start:end]
+                                slices = (arr[mbinds] for arr in (obs_s, returns_s, masks_s, actions_s, values_s, neglogpacs_s))
+                                mb_loss_vals_s.append(target_subpolicy._train_step(lr_now_s, cliprange_now_s, *slices, writer=writer,
+                                                                     update=timestep_s, cliprange_vf=cliprange_vf_now_s))
+
+                        loss_vals_s = np.mean(mb_loss_vals_s, axis=0)
+                        if self.verbose >= 1 and (update % subpolicy_log_interval == 0 or update == 1):
+                            explained_var_s = explained_variance(values_s, returns_s)
+                            logger.logkv("subpolicy index", j)
+                            logger.logkv("explained_variance", float(explained_var_s))
+                            logger.logkv("loss", safe_mean(np.asarray(mb_loss_vals_s, dtype=np.float32)))
+                            for (loss_val, loss_name) in zip(loss_vals_s, target_subpolicy.loss_names):
+                                logger.logkv(loss_name, loss_val)
+                            logger.dumpkvs()
                 self.num_timesteps += 1
                 self.ep_info_buf.extend(ep_infos)
                 mb_loss_vals = []
 
                 update_fac = self.master_model.n_batch // self.master_model.nminibatches // self.master_model.noptepochs + 1
                 inds = np.arange(self.master_model.n_batch)
-                print("udpate master")
                 for epoch_num in range(self.master_model.noptepochs):
                     np.random.shuffle(inds)
                     for start in range(0, self.master_model.n_batch, batch_size):
@@ -281,74 +311,20 @@ class SubpolicyMinibatch(dict):
                 mb_advs[step] = last_gae_lam = delta + gamma * lam * nextnonterminal * last_gae_lam
 
             # computes returns
+
             mb_values = mb_values.flatten()
             mb_returns = mb_advs + mb_values
 
-            mnbatch["values"] =  mb_values
+            mnbatch["values"] = mb_values
             mnbatch["true_rewards"] = true_reward
             mnbatch["returns"] = mb_returns
-            mnbatch["obs"] = swap_and_flatten(mnbatch["obs"])
-            mnbatch["actions"] = swap_and_flatten(mnbatch["actions"])
 
         return mnbatch_list
 
-    @staticmethod
-    def debug_to_batch(mnbatch_list, obs_dtype, gamma, lam, last_values, n_steps, subpolicy_model):
-        # batch of steps to batch of roll outs
-        for i in range(len(mnbatch_list)):
-            mnbatch = mnbatch_list[i]
-            # the subpolicy has not chosen
-            if len(mnbatch["dones"]) == 0:
-                continue
-            mnbatch.valid = True
-            for k in SubpolicyMinibatch._float_key:
-                data = mnbatch[k]
-                mnbatch[k] = np.asarray(data, dtype=np.float32)
-            mnbatch["obs"] = np.asarray(mnbatch["obs"], dtype=obs_dtype)
-            action_actual, value = subpolicy_model.predict(mnbatch["obs"])
 
-            mnbatch["dones"] = np.asarray(mnbatch["dones"], dtype=np.bool)
-
-            mb_rewards = mnbatch["rewards"]
-            mb_values = mnbatch["values"]
-            mb_dones = mnbatch["dones"]
-            mb_advs = np.zeros_like(mb_rewards)
-            true_reward = np.copy(mb_rewards)
-
-            last_gae_lam = 0
-            for step in reversed(range(n_steps)):
-                if step == n_steps - 1:
-                    nextnonterminal = 1.0 - mb_dones[-1]
-                    nextvalues = last_values[i]
-
-                else:
-                    nextnonterminal = 1.0 - mb_dones[step + 1]
-                    nextvalues = mb_advs[step + 1]
-
-                # computes advantage
-                delta = mb_rewards[step] + gamma * nextvalues * nextnonterminal - mb_values[step]
-                mb_advs[step] = last_gae_lam = delta + gamma * lam * nextnonterminal * last_gae_lam
-
-            # computes returns
-            mb_values = mb_values.flatten()
-            mb_returns = mb_advs + mb_values
-
-            mnbatch["values"] =  mb_values
-            mnbatch["true_rewards"] = true_reward
-            mnbatch["returns"] = mb_returns
-            mnbatch["obs"] = swap_and_flatten(mnbatch["obs"])
-            mnbatch["actions"] = swap_and_flatten(mnbatch["actions"])
-
-        return mnbatch_list
 
 
 class MLSHRunner(AbstractEnvRunner):
-    MB_OBS= 0
-    MB_REWARDS = 1
-    MB_ACTIONS = 2
-    MB_VALUES = 3
-    MB_NEGLOGPACS =4
-    MB_DONES = 5
 
     def __init__(self, *, env, master_model, subpolicies, n_steps, gamma, lam, subpolicy_timestep):
         """
@@ -432,11 +408,9 @@ class MLSHRunner(AbstractEnvRunner):
                     subpolicy_minibatch[idx]["dones"].append(d)
                     cursor += 1
 
-
-
                 # clip actions for each subpolicies
                 if isinstance(self.env.action_space, gym.spaces.Box):
-                    subpolicy_actions_step = np.asarray(subpolicy_actions, dtype=np.float32).flatten()
+                    subpolicy_actions_step = np.asarray(subpolicy_actions, dtype=np.float32)
                     clipped_actions = np.clip(subpolicy_actions_step, self.env.action_space.low, self.env.action_space.high)
                 else:
                     clipped_actions = np.asarray(subpolicy_actions, dtype=np.int64).flatten()
@@ -466,6 +440,7 @@ class MLSHRunner(AbstractEnvRunner):
             subpolicy_minibatch = SubpolicyMinibatch.to_batch(subpolicy_minibatch, obs_dtype=self.obs.dtype,
                                                               gamma=self.gamma, lam=self.lam, last_values=last_values,
                                                               n_steps=self.subpolicy_timestep)
+
             subpolicy_transitions.append(subpolicy_minibatch)
 
             master_reward_step = np.asarray(master_reward_step)
@@ -517,6 +492,7 @@ class MLSHRunner(AbstractEnvRunner):
         if states is not None:
             for o,s,d in zip(obs, states, done):
                 subpolicy = self.current_subpolicy[cursor]
+                o = np.expand_dims(o, axis=0)
                 a, v, new_state, negp = subpolicy.step(o, s, d)
                 actions.append(a)
                 values.append(v)
@@ -535,10 +511,7 @@ class MLSHRunner(AbstractEnvRunner):
                 neglogpacs.append(negp)
                 cursor += 1
 
-        print("observation", obs)
-        print("action", actions)
-
-        return actions, values, states, neglogpacs
+        return actions, values, None, neglogpacs
 
     def subpolicy_values(self, obs, states, done):
         cursor = 0
@@ -595,5 +568,5 @@ def get_temp_env(observation_space, num_subpolicy):
 from stable_baselines.common.policies import MlpPolicy
 if __name__ == "__main__":
     env = make_vec_env("CartPole-v0", n_envs=4)
-    model = MLSH(env=env, master_policy=MlpPolicy, subpolicy_timestep=10, num_subpolicy=1, verbose=1)
-    model.learn(100000, master_log_interval=10, subpolicy_log_interval=10)
+    model = MLSH(env=env, master_policy=MlpPolicy, subpolicy_timestep=10, num_subpolicy=2, verbose=1)
+    model.learn(100000, master_log_interval=10, subpolicy_log_interval=1)
