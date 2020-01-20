@@ -2,28 +2,10 @@ import gym
 import numpy as np
 
 
-class InnerWrapper(gym.Env):
-    def __init__(self, env):
-        self.env = env
-        self.done = False
-        self.observation_space = env.observation_space
-        self.action_space = env.action_space
-
-    def reset(self):
-        self.done = False
-        print("Env reset")
-        return self.env.reset()
-
-    def step(self, action):
-        o, r, d, i = self.env.step(action)
-        self.done = d
-        if d:
-            print("Environment done")
-        return o, r, d, i
 
 class MLSHEnvWraper(gym.Env):
     def __init__(self, env, subpolicies, subpolicy_time_schedule, warmup, gamma):
-        self.wrapped_env = InnerWrapper(env)
+        self.wrapped_env = env
         self.observation_space = env.observation_space
         self.action_space = gym.spaces.Discrete(len(subpolicies))
         self.warmup = warmup
@@ -40,11 +22,14 @@ class MLSHEnvWraper(gym.Env):
         self.gamma = gamma
         self.debug_histogram = np.zeros(shape=self.action_space.shape)
 
+        self.episode_reward = 0
+
+
     def reset(self):
         self.done = False
+        print("episode reward ", self.episode_reward)
         self.cur_observation = self.wrapped_env.reset()
         self.episode_reward =0
-        print("reset call by master")
         return self.cur_observation
 
     def step(self, action):
@@ -60,7 +45,7 @@ class MLSHEnvWraper(gym.Env):
                 steps += 1
                 if done:
                     break
-            self.cur_observation = obs
+            self.cur_observation = np.copy(obs)
             self.warmup_cnt += 1
             if self.warmup_cnt > self.warmup_period:
                 self.warmup_state = False
@@ -68,17 +53,14 @@ class MLSHEnvWraper(gym.Env):
         else:
             subpolicy = self.subpolicies[action]
             with subpolicy.sess.as_default():
-                subpolicy.learn_async(env=self.wrapped_env, total_timesteps=self.subpolicy_time_schedule)
-
+                subpolicy.learn_async(env=self.wrapped_env, total_timesteps=self.subpolicy_time_schedule,
+                                      observation=self.cur_observation)
             obs = subpolicy.master_callback["obs"]
             reward = subpolicy.master_callback["rewards"]
             done = subpolicy.master_callback["done"]
             steps = subpolicy.master_callback["episode_len"]
-            self.cur_observation = obs
-
+            self.cur_observation = np.copy(obs)
         self.episode_reward += reward
-        print("episode_reward", self.episode_reward)
-        print("done", done)
         return obs, reward, done, {}
 
 

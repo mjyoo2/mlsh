@@ -13,7 +13,7 @@ from stable_baselines.trpo_mpi.utils import  add_vtarg_and_adv, flatten_lists
 from stable_baselines.common.vec_env import VecEnv
 
 
-def traj_segment_generator(policy, env, horizon, callback, reward_giver=None, gail=False):
+def traj_segment_generator(policy, env, horizon, callback, observation, reward_giver=None, gail=False):
     """
     Compute target value using TD(lambda) estimator, and advantage with GAE(lambda)
     :param policy: (MLPPolicy) the policy
@@ -41,8 +41,6 @@ def traj_segment_generator(policy, env, horizon, callback, reward_giver=None, ga
     # Initialize state variables
     step = 0
     action = env.action_space.sample()  # not used, just so we have the datatype
-    observation = env.reset()
-
     cur_ep_ret = 0  # return in current episode
     current_it_len = 0  # len of current iteration
     current_ep_len = 0 # len of current episode
@@ -118,7 +116,6 @@ def traj_segment_generator(policy, env, horizon, callback, reward_giver=None, ga
         current_it_len += 1
         current_ep_len += 1
         if done:
-            print("transition done", done)
             # Retrieve unnormalized reward if using Monitor wrapper
             maybe_ep_info = info.get('episode')
             if maybe_ep_info is not None:
@@ -139,7 +136,6 @@ def traj_segment_generator(policy, env, horizon, callback, reward_giver=None, ga
             if not isinstance(env, VecEnv):
                 observation = env.reset()
         step += 1
-
 
 
 class MLSHSubpolicy(TRPO):
@@ -176,11 +172,12 @@ class MLSHSubpolicy(TRPO):
         self._setup_learn_flag = True
         return super(MLSHSubpolicy, self)._setup_learn()
 
-    def learn_async(self, total_timesteps, env, writer=None):
+    def learn_async(self, total_timesteps, observation, env, writer=None):
 
         with self.sess.as_default():
             self.master_callback = {"rewards":0, "obs": None, "done": False, "episode_len":0}
-            seg_gen = traj_segment_generator(self.policy_pi, env, total_timesteps, callback=self.master_callback,
+            seg_gen = traj_segment_generator(self.policy_pi, env, total_timesteps, observation=observation,
+                                             callback=self.master_callback,
                                              reward_giver=self.reward_giver, gail=False)
 
             len_buffer = deque(maxlen=40)  # rolling buffer for episode lengths
@@ -220,7 +217,6 @@ class MLSHSubpolicy(TRPO):
 
                 atarg, tdlamret = seg["adv"], seg["tdlamret"]
                 endpoint = self.endpoint(seg["dones"])
-                print("dones", seg["dones"])
                 if endpoint != len(seg["dones"]) and not end:
                     self.master_callback["done"] = True
 
@@ -334,11 +330,13 @@ class MLSHSubpolicy(TRPO):
                 self.num_timesteps += current_it_timesteps
                 iters_so_far += 1
                 last_obs = seg["observations"][-1]
-                if self.verbose >= 1 and self.rank == 0:
-                    logger.dump_tabular()
+
+
         self.master_callback["obs"] = last_obs
         self.master_callback["rewards"] = master_reward
         self.master_callback["episode_len"] = master_episode_len
+        if self.verbose >= 1:
+            logger.dump_tabular()
         return self
 
     @staticmethod
