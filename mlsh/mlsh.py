@@ -14,6 +14,7 @@ from stable_baselines.ppo2 import PPO2
 
 from stable_baselines import logger
 from stable_baselines.a2c.utils import total_episode_reward_logger
+import tensorflow as tf
 
 
 class MLSH(BaseRLModel):
