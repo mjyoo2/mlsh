@@ -1,179 +1,32 @@
-from stable_baselines.common.base_class import BaseRLModel, _UnvecWrapper
-from gym.spaces import Discrete
-from stable_baselines.common.vec_env import VecEnv
-from stable_baselines.common import make_vec_env
-from copy import copy
-from gym import Env
+import gym
+import tensorflow as tf
+from collections import deque
+from stable_baselines.trpo_mpi.trpo_mpi import TRPO, traj_segment_generator
+from mlsh_training_env_wrapper import MLSHEnvWraper
+from sub_policy import MLSHSubpolicy
 
 
-def set_env(self, env):
-    """
-    Checks the validity of the environment, and if it is coherent, set it as the current environment.
-    :param env: (Gym Environment) The environment for learning a policy
-    """
-    if env is None and self.env is None:
-        if self.verbose >= 1:
-            print("Loading a model without an environment, "
-                  "this model cannot be trained until it has a valid environment.")
-        return
-    elif env is None:
-        raise ValueError(
-            "Error: trying to replace the current environment with None")
-
-    # sanity checking the environment
-    assert self.observation_space == env.observation_space, \
-        "Error: the environment passed must have at least the same observation space as the model was trained on."
-    assert self.action_space == Discrete(self.num_subpolicy), \
-        "Error: the environment passed must have at least the same action space as the model was trained on."
-    if self._requires_vec_env:
-        assert isinstance(env, VecEnv), \
-            "Error: the environment passed is not a vectorized environment, however {} requires it".format(
-                self.__class__.__name__)
-        assert not self.policy.recurrent or self.n_envs == env.num_envs, \
-            "Error: the environment passed must have the same number of environments as the model was trained on." \
-            "This is due to the Lstm policy not being capable of changing the number of environments."
-        self.n_envs = env.num_envs
-    else:
-        # for models that dont want vectorized environment, check if they make sense and adapt them.
-        # Otherwise tell the user about this issue
-        if isinstance(env, VecEnv):
-            if env.num_envs == 1:
-                env = _UnvecWrapper(env)
-                self._vectorize_action = True
-            else:
-                raise ValueError("Error: the model requires a non vectorized environment or a single vectorized "
-                                 "environment.")
-        else:
-            self._vectorize_action = False
-
-        self.n_envs = 1
-
-    self.env = env
-
-    # Invalidated by environment change.
-    self.episode_reward = None
-    self.ep_info_buf = None
-
-
-class MasterModel(BaseRLModel):
-
-    class TempEnv(Env):
-        def __init__(self, observation_space, num_subpolicy):
-            self.observation_space = observation_space
-            self.action_space = Discrete(num_subpolicy)
-
-        def step(self, action):
-            pass
-
-        def reset(self):
-            pass
-
-        def render(self, mode='human'):
-            pass
-
-
-    def __init__(self, policy, env, master_model_class, num_subpolicy=3, *args, **kwargs):
-        if "requires_vec_env" not in kwargs.keys():
-            kwargs["requires_vec_env"] = True
-        if "policy_base" not in kwargs.keys():
-            kwargs["policy_base"] = None
-        super(MasterModel, self).__init__(policy, env, **kwargs)
-        self.num_subpolicy = num_subpolicy
-        master_model_class = copy(master_model_class)
-        setattr(master_model_class, "set_env", set_env)
-        if isinstance(env, VecEnv):
-            temp_env = make_vec_env(lambda: self.tempenv(env.observation_space, num_subpolicy),n_envs=1)
-        else:
-            temp_env = self.tempenv(env.observation_space, num_subpolicy)
-        self.model = master_model_class(policy, temp_env)
-        self.action_space = Discrete(self.num_subpolicy)
-
-    @classmethod
-    def tempenv(cls, observation_space, num_subpolicy):
-        return cls.TempEnv(observation_space, num_subpolicy)
-
-    def set_env(self, env):
-        """
-        Checks the validity of the environment, and if it is coherent, set it as the current environment.
-        :param env: (Gym Environment) The environment for learning a policy
-        """
-        if env is None and self.env is None:
-            if self.verbose >= 1:
-                print("Loading a model without an environment, "
-                      "this model cannot be trained until it has a valid environment.")
-            return
-        elif env is None:
-            raise ValueError(
-                "Error: trying to replace the current environment with None")
-
-        # sanity checking the environment
-        assert self.observation_space == env.observation_space, \
-            "Error: the environment passed must have at least the same observation space as the model was trained on."
-        assert self.action_space == Discrete(self.num_subpolicy), \
-            "Error: the environment passed must have at least the same action space as the model was trained on."
-        if self._requires_vec_env:
-            assert isinstance(env, VecEnv), \
-                "Error: the environment passed is not a vectorized environment, however {} requires it".format(
-                    self.__class__.__name__)
-            assert not self.policy.recurrent or self.n_envs == env.num_envs, \
-                "Error: the environment passed must have the same number of environments as the model was trained on." \
-                "This is due to the Lstm policy not being capable of changing the number of environments."
-            self.n_envs = env.num_envs
-        else:
-            # for models that dont want vectorized environment, check if they make sense and adapt them.
-            # Otherwise tell the user about this issue
-            if isinstance(env, VecEnv):
-                if env.num_envs == 1:
-                    env = _UnvecWrapper(env)
-                    self._vectorize_action = True
-                else:
-                    raise ValueError("Error: the model requires a non vectorized environment or a single vectorized "
-                                     "environment.")
-            else:
-                self._vectorize_action = False
-
-            self.n_envs = 1
-
-        self.env = env
-
-        # Invalidated by environment change.
-        self.episode_reward = None
-        self.ep_info_buf = None
-
-    def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
-        return self.model.action_probability(observation, state, mask, actions, logp)
-
-    def setup_model(self):
-        pass
-
-    def get_parameter_list(self):
-        return self.model.get_parameter_list()
-
-    def _get_pretrain_placeholders(self):
-        return self.model._get_pretrain_placeholders()
-
-    def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="master",
-              reset_num_timesteps=False):
-        return self.model.learn(total_timesteps, callback=callback, log_interval=log_interval, tb_log_name=tb_log_name,
-                                reset_num_timesteps=reset_num_timesteps)
-
-    def predict(self, observation, state=None, mask=None, deterministic=False):
-        return self.model.predict(observation, state, mask, deterministic)
-
-    def save(self, save_path, cloudpickle=False):
-        # TODO: how to save the master and sub models
-        self.model.save(save_path, cloudpickle=cloudpickle)
-
-    @classmethod
-    def load(cls, load_path, env=None, custom_objects=None, **kwargs):
-        # TODO: load the master model
-        pass
-
+class MLSH(TRPO):
+    def __init__(self, policy, env, num_subpolicy=3, subpolicy_time=50, warmup=20, gamma=0.99, timesteps_per_batch=128, max_kl=0.01, cg_iters=10, lam=0.98,
+                 entcoeff=0.0, cg_damping=1e-2, vf_stepsize=3e-4, vf_iters=3, verbose=0, tensorboard_log=None,
+                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
+                 seed=None, n_cpu_tf_sess=1):
+        self.subpolicies = [MLSHSubpolicy(env=env, policy=policy, timesteps_per_batch=subpolicy_time) for _ in range(num_subpolicy)]
+        wrapped_env = MLSHEnvWraper(env=env, subpolicies=self.subpolicies, subpolicy_time_schedule=subpolicy_time, warmup=warmup, gamma=gamma)
+        super(MLSH, self).__init__(policy=policy, env=wrapped_env, verbose=verbose, timesteps_per_batch=timesteps_per_batch,
+                                   max_kl=max_kl, lam=lam, entcoeff=entcoeff, cg_damping=cg_damping,
+                                   vf_stepsize=vf_stepsize, vf_iters=vf_iters, tensorboard_log=tensorboard_log,
+                                   _init_setup_model=_init_setup_model, policy_kwargs=policy_kwargs,
+                                   full_tensorboard_log=full_tensorboard_log, seed=seed, n_cpu_tf_sess=n_cpu_tf_sess,
+                                            gamma=gamma, cg_iters=cg_iters)
 
 
 import gym
 from stable_baselines.common.policies import MlpPolicy
-from stable_baselines import PPO2
-if __name__ == '__main__':
-    env = make_vec_env("CartPole-v0", n_envs=8)
-    model = MasterModel(env=env, policy=MlpPolicy, master_model_class=PPO2)
+if __name__ =="__main__":
+    env = gym.make("CartPole-v0")
+    model = MLSH(env=env, policy=MlpPolicy, verbose=1, subpolicy_time=50, vf_stepsize=1e-2)
+    for i in range(100):
+        model.learn(1000)
+        model.setup_model()
+        print("reset master")

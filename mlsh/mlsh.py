@@ -569,4 +569,4 @@ from stable_baselines.common.policies import MlpPolicy
 if __name__ == "__main__":
     env = make_vec_env("CartPole-v0", n_envs=4)
     model = MLSH(env=env, master_policy=MlpPolicy, subpolicy_timestep=10, num_subpolicy=2, verbose=1)
-    model.learn(100000, master_log_interval=10, subpolicy_log_interval=1)
+    model.learn(10000000, master_log_interval=10, subpolicy_log_interval=1)
