@@ -24,43 +24,36 @@ class MLSHEnvWraper(gym.Env):
 
         self.episode_reward = 0
 
-
     def reset(self):
         self.done = False
-        print("episode reward ", self.episode_reward)
         self.cur_observation = self.wrapped_env.reset()
         self.episode_reward =0
         return self.cur_observation
 
     def step(self, action):
-        if self.warmup_state:
-            subpolicy = self.subpolicies[action]
-            reward = 0
-            done = False
-            steps = 0
+        subpolicy = self.subpolicies[action]
+        reward = 0
+        done = False
+        steps = 0
+        obs = self.cur_observation
+        if self.warmup_cnt < self.warmup_period:
             for i in range(self.subpolicy_time_schedule):
-                subpolicy_action, _  = subpolicy.predict(self.cur_observation)
-                obs, r, done, info = self.wrapped_env.step(subpolicy_action)
+                obs, r, done, info = subpolicy.rollout_async(obs, self.wrapped_env)
+                self.cur_observation = obs
                 reward += r
                 steps += 1
                 if done:
                     break
-            self.cur_observation = np.copy(obs)
-            self.warmup_cnt += 1
-            if self.warmup_cnt > self.warmup_period:
-                self.warmup_state = False
-
         else:
-            subpolicy = self.subpolicies[action]
-            with subpolicy.sess.as_default():
-                subpolicy.learn_async(env=self.wrapped_env, total_timesteps=self.subpolicy_time_schedule,
-                                      observation=self.cur_observation)
-            obs = subpolicy.master_callback["obs"]
-            reward = subpolicy.master_callback["rewards"]
-            done = subpolicy.master_callback["done"]
-            steps = subpolicy.master_callback["episode_len"]
-            self.cur_observation = np.copy(obs)
-        self.episode_reward += reward
+            for i in range(self.subpolicy_time_schedule):
+                obs, r, done, info = subpolicy.rollout_async(obs, self.wrapped_env)
+                subpolicy.learn_async()
+                self.cur_observation = obs
+                reward += r
+                steps += 1
+                if done:
+                    break
+        self.warmup_cnt += 1
         return obs, reward, done, {}
 
 
