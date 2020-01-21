@@ -29,6 +29,7 @@ class MLSH(TRPO):
         for s in self.subpolicies:
             for _ in range(steps):
                 s.learn_async()
+            s.async_step += steps
     def warmup_policy(self, steps=10000, verbose=1):
 
         for s in self.subpolicies:
@@ -59,9 +60,9 @@ class wrappedenv(gym.Env):
 from stable_baselines.deepq import DQN
 from copy import copy
 if __name__ =="__main__":
-    env = wrappedenv(gym.make("MovementBandits-v0"))
-
+    env = gym.make("MovementBandits-v0")
     model = MLSH(env=env, policy=MlpPolicy, subpolicy_network=LnMlpPolicy, num_subpolicy=3, verbose=1, subpolicy_time=12, vf_stepsize=1e-2)
+    model.warmup_policy(10000)
     model.learn(10000, log_interval=1)
     for i in range(10):
         model.learn(100000, log_interval=1)

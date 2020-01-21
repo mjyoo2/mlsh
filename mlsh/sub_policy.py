@@ -487,6 +487,11 @@ class MLSHSubpolicyDQN(DQN):
                 new_priorities = np.abs(td_errors) + self.prioritized_replay_eps
                 assert isinstance(self.replay_buffer, PrioritizedReplayBuffer)
                 self.replay_buffer.update_priorities(batch_idxes, new_priorities)
+
+            if can_sample and self.num_timesteps > self.learning_starts and \
+                    self.async_step % self.target_network_update_freq == 0:
+                # Update target network periodically.
+                self.update_target(sess=self.sess)
         self.async_step += 1
         return self
 
