@@ -3,15 +3,16 @@ import tensorflow as tf
 from collections import deque
 from stable_baselines.trpo_mpi.trpo_mpi import TRPO, traj_segment_generator
 from mlsh_training_env_wrapper import MLSHEnvWraper
-from sub_policy import MLSHSubpolicyDQN
-from stable_baselines.deepq.policies import LnMlpPolicy
+from sub_policy import MLSHSubpolicySAC
+from stable_baselines.sac.policies import LnMlpPolicy
+import numpy as np
 
 class MLSH(TRPO):
-    def __init__(self, policy, subpolicy_network, env, num_subpolicy=3, subpolicy_time=50, warmup=20, gamma=0.99, timesteps_per_batch=1024, max_kl=0.01, cg_iters=10, lam=0.98,
+    def __init__(self, policy, subpolicy_network, env, num_subpolicy=3, subpolicy_time=50, warmup=20, gamma=0.99, timesteps_per_batch=64, max_kl=0.01, cg_iters=10, lam=0.98,
                  entcoeff=0.0, cg_damping=1e-2, vf_stepsize=3e-4, vf_iters=3, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
                  seed=None, n_cpu_tf_sess=1):
-        self.subpolicies = [MLSHSubpolicyDQN(env=env, policy=subpolicy_network, verbose=0) for _ in range(num_subpolicy)]
+        self.subpolicies = [MLSHSubpolicySAC(env=env, policy=subpolicy_network, verbose=0) for _ in range(num_subpolicy)]
         self.subpolicies[0].name = "debugger"
         wrapped_env = MLSHEnvWraper(env=env, subpolicies=self.subpolicies, subpolicy_time_schedule=subpolicy_time, warmup=warmup, gamma=gamma)
         super(MLSH, self).__init__(policy=policy, env=wrapped_env, verbose=verbose, timesteps_per_batch=timesteps_per_batch,
@@ -58,12 +59,37 @@ class wrappedenv(gym.Env):
         self.episode_reward += r
         return s, r, d, i
 from stable_baselines.deepq import DQN
+from stable_baselines import SAC
+from stable_baselines.sac.policies import MlpPolicy as SACMlpPolicy
 from copy import copy
+class DiscreteEnvWrapper(gym.Env):
+    def __init__(self, env):
+        self.env = env
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(1, ))
+        self.env_action_space = self.env.action_space
+
+        assert isinstance(self.env_action_space, gym.spaces.Discrete)
+        self.n = self.env_action_space.n
+        self.observation_space = env.observation_space
+        print("observation")
+        print(self.observation_space)
+    def reset(self):
+        return self.env.reset()
+
+    def step(self, action):
+        action += 1
+        action *= 0.5 * self.n
+        action = np.int32(np.round(action))
+        return self.env.step(action)
+
+
+
+from stable_baselines.deepq.policies import LnMlpPolicy as DQNLnMlpPolicy
+
 if __name__ =="__main__":
-    env = gym.make("MovementBandits-v0")
-    model = MLSH(env=env, policy=MlpPolicy, subpolicy_network=LnMlpPolicy, num_subpolicy=3, verbose=1, subpolicy_time=12, vf_stepsize=1e-2)
-    model.warmup_policy(10000)
-    model.learn(10000, log_interval=1)
+    env = gym.make("MovementBandits-v1")
+    model = MLSH(env=env, policy=MlpPolicy, subpolicy_network=LnMlpPolicy, num_subpolicy=3, verbose=1, subpolicy_time=4, vf_stepsize=1e-2)
+
     for i in range(10):
         model.learn(100000, log_interval=1)
         model.setup_model()

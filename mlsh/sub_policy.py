@@ -392,7 +392,7 @@ class MLSHSubpolicySAC(SAC):
                         or self.async_step < self.learning_starts:
                     break
                 self.async_step+= 1
-                current_lr = self.learning_rate(frac)
+                current_lr = self.async_lr_scheduler(frac)
                 # Update policy and critics (q functions)
                 mb_infos_vals.append(self._train_step(self.async_step, writer, current_lr))
                 # Update target network

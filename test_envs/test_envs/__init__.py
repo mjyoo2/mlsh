@@ -27,3 +27,9 @@ register(
     max_episode_steps=100,
     reward_threshold = 1,
 )
+
+register(
+    id='MovementBandits-v1',
+    entry_point='test_envs.envs:MovementBanditsCont',
+    max_episode_steps=50,
+)
