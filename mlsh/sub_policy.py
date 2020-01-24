@@ -18,6 +18,8 @@ from stable_baselines import DQN
 from stable_baselines.deepq.dqn import PrioritizedReplayBuffer, ReplayBuffer
 from stable_baselines.common.schedules import LinearSchedule
 
+from pympler.tracker import SummaryTracker
+
 def traj_segment_generator(policy, env, horizon, callback, observation, reward_giver=None, gail=False):
     """
     Compute target value using TD(lambda) estimator, and advantage with GAE(lambda)
@@ -180,6 +182,7 @@ class MLSHSubpolicy(TRPO):
     def learn_async(self, total_timesteps, observation, env, writer=None):
 
         with self.sess.as_default():
+
             self.master_callback = {"rewards":0, "obs": None, "done": False, "episode_len":0}
             seg_gen = traj_segment_generator(self.policy_pi, env, total_timesteps, observation=observation,
                                              callback=self.master_callback,
@@ -378,12 +381,12 @@ class MLSHSubpolicySAC(SAC):
         # inferred actions need to be transformed to environment action_space before stepping
         unscaled_action = unscale_action(env.action_space, action)
         new_obs, reward, done, info = self.env.step(unscaled_action)
-        self.replay_buffer.add(np.copy(obs), action, reward, np.copy(new_obs), float(done))
+        self.replay_buffer.add(obs, action, reward, new_obs, float(done))
         return new_obs, reward, done, info
 
     def learn_async(self, writer=None, frac=1):
+
         if self.async_step % self.train_freq == 0:
-            mb_infos_vals = []
             # Update policy, critics and target networks
             for grad_step in range(self.gradient_steps):
                 # Break if the warmup phase is not over
@@ -394,16 +397,17 @@ class MLSHSubpolicySAC(SAC):
                 self.async_step+= 1
                 current_lr = self.async_lr_scheduler(frac)
                 # Update policy and critics (q functions)
-                mb_infos_vals.append(self._train_step(self.async_step, writer, current_lr))
+                self._train_step(self.async_step, writer, current_lr)
                 # Update target network
                 if (self.async_step + grad_step) % self.target_update_interval == 0:
                     # Update target network
                     self.sess.run(self.target_update_op)
-            # Log losses and entropy, useful for monitor training
-            if len(mb_infos_vals) > 0:
-                infos_values = np.mean(mb_infos_vals, axis=0)
         self.async_step += 1
         return self
+
+    def clear_replay_buffer(self):
+        del self.replay_buffer
+        self.replay_buffer = ReplayBuffer(self.buffer_size)
 
 
 class MLSHSubpolicyDQN(DQN):
