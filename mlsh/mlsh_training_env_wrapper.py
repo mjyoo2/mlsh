@@ -2,7 +2,6 @@ import gym
 import numpy as np
 
 
-
 class MLSHEnvWraper(gym.Env):
     def __init__(self, env, subpolicies, subpolicy_time_schedule, warmup, gamma):
         self.wrapped_env = env
@@ -55,18 +54,3 @@ class MLSHEnvWraper(gym.Env):
                     break
         self.warmup_cnt += 1
         return obs, reward, done, {}
-
-
-from sub_policy import MLSHSubpolicy
-from stable_baselines.common.policies import  MlpPolicy
-
-if __name__ == "__main__":
-
-    env= gym.make("CartPole-v0")
-    subpolicies = [MLSHSubpolicy(env=env, policy=MlpPolicy, verbose=0)]
-    tempenv = MLSHEnvWraper(env=env, subpolicies=subpolicies, subpolicy_time_schedule=20, warmup=10, gamma=0.99)
-    for i in range(100):
-        obs = tempenv.reset()
-        done = False
-        while not done:
-            obs, reward, done, info = tempenv.step(0)
