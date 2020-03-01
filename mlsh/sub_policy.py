@@ -15,7 +15,6 @@ class MLSHSubpolicySAC(SAC):
         self.async_lr_scheduler = get_schedule_fn(self.learning_rate)
         self.async_step = 1
         self.current_lr = self.async_lr_scheduler(1)
-        self._setup_learn()
 
     def rollout_async(self, obs, env):
         """
@@ -60,6 +59,9 @@ class MLSHSubpolicySAC(SAC):
         del self.replay_buffer
         self.replay_buffer = ReplayBuffer(self.buffer_size)
 
+    def setup_learn(self):
+        return super()._setup_learn()
+
 
 class MLSHSubpolicyDQN(DQN):
     def __init__(self, exploration_steps=10000, replay_wrapper=None, *args, **kwargs):
@@ -71,24 +73,7 @@ class MLSHSubpolicyDQN(DQN):
         self.exploration = LinearSchedule(schedule_timesteps=int(self.exploration_fraction * exploration_steps),
                                               initial_p=self.exploration_initial_eps,
                                               final_p=self.exploration_final_eps)
-        self._setup_learn()
-        # Create the replay buffer
-        if self.prioritized_replay:
-            self.replay_buffer = PrioritizedReplayBuffer(self.buffer_size, alpha=self.prioritized_replay_alpha)
-            if self.prioritized_replay_beta_iters is None:
-                prioritized_replay_beta_iters = exploration_steps
-            else:
-                prioritized_replay_beta_iters = self.prioritized_replay_beta_iters
-            self.beta_schedule = LinearSchedule(prioritized_replay_beta_iters,
-                                                initial_p=self.prioritized_replay_beta0,
-                                                final_p=1.0)
-        else:
-            self.replay_buffer = ReplayBuffer(self.buffer_size)
-            self.beta_schedule = None
-
-        if replay_wrapper is not None:
-            assert not self.prioritized_replay, "Prioritized replay buffer is not supported by HER"
-            self.replay_buffer = replay_wrapper(self.replay_buffer)
+        self.replay_wrapper = replay_wrapper
 
     def rollout_async(self, obs, env):
         update_eps = self.exploration.value(self.async_step)
@@ -149,3 +134,16 @@ class MLSHSubpolicyDQN(DQN):
                 self.update_target(sess=self.sess)
         self.async_step += 1
         return self
+
+    def setup_learn(self):
+        self._setup_learn()
+        # Create the replay buffer
+        if self.prioritized_replay:
+            raise NotImplementedError("PER has not implemented yet")
+        else:
+            self.replay_buffer = ReplayBuffer(self.buffer_size)
+            self.beta_schedule = None
+
+        if self.replay_wrapper is not None:
+            assert not self.prioritized_replay, "Prioritized replay buffer is not supported by HER"
+            self.replay_buffer = self.replay_wrapper(self.replay_buffer)
